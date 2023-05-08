@@ -1,0 +1,21 @@
+GET http://localhost:8080/server-status
+Content-Type: application/json
+
+{
+    "id": "gfhghfgh",
+    "code": "CLIENT_GREETING_REQUEST"
+}
+###
+POST http://localhost:8080/send-file
+Content-Type: application/json
+
+{
+    "id": "client_biocarlik",
+    "code": "CLIENT_MEDIA_FILE",
+    "requestcontents": "MEDIA",
+    "ext": "wav",
+	"name": "ЭТМвстреча.wav",
+	"link": "www.etm.com"
+}
+###
+DELETE http://localhost:8080/shopping-items/uuid
