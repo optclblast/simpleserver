@@ -9,10 +9,13 @@ import (
 	"server/api"
 )
 
+// 192.168.2.110
 func main() {
 	port := portDeclaration()
 	server := api.NewServer()
-	err := http.ListenAndServe(port, server)
+	addr := "192.168.2.110"
+	fmt.Println(addr + port)
+	err := http.ListenAndServe(addr+port, server)
 	if err != nil {
 		log.Panicf("Server cannot serve to choosen port (%s)! \n Got the following error:\n%s", port, err)
 	}
