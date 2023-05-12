@@ -16,7 +16,7 @@ import (
 
 const (
 	whisperAIScript = "./script.py" //whisper-ai script
-	downloadingDir  = "./files"     //filder to store our files
+	downloadingDir  = "./files"     //folder to store our files
 	//file statuses
 	ACCEPTED    = "ACCEPTED"
 	IN_PROGRESS = "IN_PROGRESS"
@@ -67,7 +67,6 @@ func (server *Server) routes() {
 
 }
 
-// endpoint handler
 func (server *Server) handleSendLink() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		//reading from query string
@@ -84,7 +83,7 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 			return
 		}
 
-		//Downloading file via link in the gotten request
+		//Downloading file via link from req
 		resp, err := http.Get(link)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -126,7 +125,7 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 			Link:   link,
 			WH:     responseURL,
 		}
-		log.Printf("FILE: %s\n", file_inlist) //logging recieved file
+		log.Printf("FILE: %s\n", file_inlist) //logging file struct data
 
 		server.filesList[fileID] = file_inlist //adding file into a table of files, that server cares of at the moment
 
@@ -150,15 +149,14 @@ func (server *Server) handleGetResult() http.HandlerFunc {
 
 		//checking for file in the list
 		if _, ok := server.filesList[fileID]; !ok {
-			w.WriteHeader(http.StatusNotFound) //not found
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
-		//got the data
 		result := server.filesList[fileID]
 		text, tone, summary := text_tone_summary(result)
 
-		//prepearing response with out content
+		//prepearing response with
 		response := map[string]string{
 			"text":    string(text),
 			"tone":    string(tone),
@@ -171,7 +169,7 @@ func (server *Server) handleGetResult() http.HandlerFunc {
 			return
 		}
 
-		// Write the response JSON to the response writer
+		// Writing the response JSON to the response writer
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		w.Write(responseJSON)
