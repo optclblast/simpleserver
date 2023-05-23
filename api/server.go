@@ -10,102 +10,151 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/gorilla/mux"
 )
 
+var API_KEY_CLIENT = []string{"key1", "key2", "key3", "key4"}
+var API_KEY_FK = []string{"key"}
+
 const (
-	whisperAIScript = "./script.py" //whisper-ai script
-	downloadingDir  = "./files"     //folder to store our files
-	//file statuses
-	ACCEPTED    = "ACCEPTED"
-	IN_PROGRESS = "IN_PROGRESS"
-	DONE        = "DONE"
+	OPENAI_API_TOKEN = "YOUR_TOKEN"
+
+	whisperAIScript = "yourpath/diarize.py" //whisper-ai script
+	downloadingDir  = "PATH"
+	DONE            = "DONE"
+	ACCEPTED        = "ACCEPTED"
+	IN_PROGRESS     = "IN_PROGRESS"
 )
 
-// struct to store data about file and request
 type MediaFile struct {
-	GUID   string
-	Name   string
-	Path   string
-	Status string
-	Link   string
-	WH     string
+	GUID        string
+	Name        string
+	Path        string
+	Status      string
+	Link        string
+	WH          string
+	WhisperDone bool
+	SummaryDone bool
+	ToneDone    bool
 }
 
-// request itself
 type Request struct {
 	ID            string `json:"id"`
 	RequestStatus string `json:"status"`
 }
 
-// server itself
+type YandexApiResponse struct {
+	Href      string `json:"href"`
+	Method    string `json:"method"`
+	Templated bool
+}
+
+type LogEntry struct {
+	date     time.Time
+	contents string
+}
+
 type Server struct {
 	*mux.Router
 	filesList map[string]MediaFile
+	bussy     bool
 }
 
-// server init
+func NewLogEntry(date time.Time, content string) LogEntry {
+	logentry := LogEntry{
+		date:     date,
+		contents: content,
+	}
+	return logentry
+}
+
 func NewServer() *Server {
 	server := &Server{
 		Router:    mux.NewRouter(),
 		filesList: map[string]MediaFile{},
+		bussy:     false,
 	}
+	fmt.Println(server.bussy)
 	server.routes()
 	return server
 }
 
-// servers worldmap
 func (server *Server) routes() {
-	go server.HandleFunc("/server-status", server.serverStatus()).Methods("GET")
-	go server.HandleFunc("/getAll", server.getAll()).Methods("GET")
-	go server.HandleFunc("/getFile", server.getFile()).Methods("POST")
-	go server.HandleFunc("/postFile", server.receiveFileFromClient()).Methods("POST")
 	//FK server endpoints
-	go server.HandleFunc("/send-link", server.handleSendLink()).Methods("GET")
-	go server.HandleFunc("/get-result", server.handleGetResult()).Methods("GET")
-
+	server.HandleFunc("/send-link", server.handleSendLink()).Methods("GET")
+	server.HandleFunc("/get-result", server.handleGetResult()).Methods("GET")
+	server.HandleFunc("/whisper_ping", server.handleWhisperPing()).Methods("GET")
+	server.HandleFunc("/main", server.handleMainPage()).Methods("GET")
+	server.HandleFunc("/main/diarize-file", server.handleUploadedFile()).Methods("POST")
 }
 
+// recieving data from client
 func (server *Server) handleSendLink() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		//reading from query string
 		params := r.URL.Query()
 		fileID := params.Get("file_id")
+		apiKey := params.Get("api_key")
 		link := params.Get("link")
 		responseURL := params.Get("response_uri")
-
-		fmt.Printf("PARAMS: %s\n", params)
-		//handling missing query string
-		if fileID == "" || responseURL == "" || link == "" {
-
-			w.WriteHeader(http.StatusBadRequest)
+		fmt.Println(server.bussy)
+		//log.Printf("PARAMS: %s\n", params) //debug stuff
+		//auth
+		if !ValidKey(API_KEY_CLIENT, apiKey) {
+			w.WriteHeader(http.StatusUnauthorized)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Invalid authorization at /send-link\nApi key: %s\nRequest by: %s", apiKey, responseURL),
+			})
 			return
 		}
 
-		//Downloading file via link from req
+		//handling missing query string
+		if fileID == "" || responseURL == "" || link == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Invalid request at /send-link by: %s", responseURL),
+			})
+			return
+		}
+
+		//Downloading file via link in the gotten request
 		resp, err := http.Get(link)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Cannot download file by link: %s", link),
+			})
 			return
 		}
-		log.Printf("%v\n", resp)
 
 		fileName := filepath.Base(resp.Request.URL.Path)
 		newdir := fmt.Sprintf("%s\\%s", downloadingDir, fileName)
 		err = os.Mkdir(newdir, 0750)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during creating a folder\n%s \n", err)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("An error has accured during creating a folder (/send-link)\n%s \n", err),
+			})
 			return
 		}
+
 		if fileName[len(fileName)-4:] != ".mp3" {
 			fileName += ".mp3"
 		}
+
 		file, err := os.Create(fmt.Sprintf("%s\\", newdir) + fileName) //saving file to files dir
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during creating file\n%s \n", err)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("An error has accured during creating file\n%s (/send-link)\n", err),
+			})
 			return
 		}
 
@@ -113,50 +162,64 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 		_, err = io.Copy(file, resp.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during writing a file\n%s \n", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("An error has accured during writing a file\n%s \n", err),
+			})
 			return
 		}
 
 		file_inlist := MediaFile{
-			GUID:   fileID,
-			Path:   newdir,
-			Name:   fileName,
-			Status: ACCEPTED,
-			Link:   link,
-			WH:     responseURL,
+			GUID:        fileID,
+			Path:        newdir,
+			Name:        fileName,
+			Status:      ACCEPTED,
+			Link:        link,
+			WH:          responseURL,
+			WhisperDone: false,
+			SummaryDone: false,
+			ToneDone:    false,
 		}
-		log.Printf("FILE: %s\n", file_inlist) //logging file struct data
-
-		server.filesList[fileID] = file_inlist //adding file into a table of files, that server cares of at the moment
-
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("File has been created: \n", file_inlist),
+		})
+		server.filesList[fileID] = file_inlist
 		defer resp.Body.Close()
+		defer file.Close()
 
 		//executing whisper's scpipt
-		go evaluatingWhisper(fmt.Sprintf("%s\\%s", newdir, fileName), server.filesList[fileID])
+		go server.evaluatingWhisper(fmt.Sprintf("%s\\%s", newdir, fileName), server.filesList[fileID])
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during evaling whisper\n%s \n", err)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("An error has accured during evaling whisper\n%s \n", err),
+			})
 			return
 		}
 		w.WriteHeader(200)
 	}
 }
 
+// sending result back to client
 func (server *Server) handleGetResult() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		params := r.URL.Query()
-		fileID := params.Get("fileID")
-
-		//checking for file in the list
-		if _, ok := server.filesList[fileID]; !ok {
-			w.WriteHeader(http.StatusNotFound)
+		fileID := params.Get("file_id")
+		if apiKey := params.Get("apiKey"); ValidKey(API_KEY_CLIENT, apiKey) {
+			w.WriteHeader(http.StatusUnauthorized) //
 			return
 		}
 
-		result := server.filesList[fileID]
-		text, tone, summary := text_tone_summary(result)
+		file := server.filesList[fileID]
+		//checking for file in the lis
+		//got the data
 
-		//prepearing response with
+		text, tone, summary := text_tone_summary(file)
+
+		//prepearing response with out content
 		response := map[string]string{
 			"text":    string(text),
 			"tone":    string(tone),
@@ -166,111 +229,202 @@ func (server *Server) handleGetResult() http.HandlerFunc {
 		responseJSON, err := json.Marshal(response)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Error at json marshalling (handleGetResult):\n%s \n", err),
+			})
 			return
 		}
 
-		// Writing the response JSON to the response writer
+		// Write the response JSON to the response writer
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		w.Write(responseJSON)
+
+		err = os.RemoveAll(file.Path)
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Error at files removing (handleGetResult):\n%s \n", err),
+			})
+		}
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("A file (%s) sended to %s successfully!", file.GUID, file.WH),
+		})
+		delete(server.filesList, file.GUID)
 	}
 }
 
-func (server *Server) serverStatus() http.HandlerFunc {
+// recieving ping from whisper that file (by guid) is done or script ended up with errors
+func (server *Server) handleWhisperPing() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var json_content Request
-		err := json.NewDecoder(r.Body).Decode(&json_content)
-		if err != nil || json_content.ID == "" {
+		params := r.URL.Query()
+		fileID := params.Get("file_id")
+		errors := params.Get("error")
+
+		file := server.filesList[fileID]
+
+		if errors != "" {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Whisper cannot handle %s request! Whisper's error:\n%s\n", fileID, errors),
+			})
+			w.WriteHeader(http.StatusBadRequest)
+			server.pingFKErrorCase(file, errors)
+			return
+		}
+		if file.Link == "fk" {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("File from FK: %s", file.Name),
+			})
+			return
+		}
+
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("Whisper finished working on %s file\n", fileID),
+		})
+
+		for key := range server.filesList {
+			fmt.Println(key)
+		}
+		file.WhisperDone = true
+		file.Status = DONE
+		server.bussy = false
+		b, err := pingClientFK(file)
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Bad req to FK! %s\n%d", err, b),
+			})
+		}
+		//}
+	}
+}
+
+func (server *Server) handleMainPage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		w.Write(readFile("./htmls/main.html"))
+	}
+}
+
+func (server *Server) handleUploadedFile() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println(server.bussy)
+		err := r.ParseMultipartForm(10 << 20)
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint(err),
+		})
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint(err),
+			})
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		json_content.ID = "correct"
-		//json_content.RequestContents = "The server is OK"
-		//server.requests = append(server.requests, json_content)
 
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(json_content); err != nil {
+		file, handler, err := r.FormFile("file")
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint(err),
+			})
+			http.Error(w, "Failed to retrieve file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		dst, err := os.Create("./files/" + handler.Filename)
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint(err),
+			})
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-}
+		defer dst.Close()
 
-func (server *Server) receiveFileFromClient() http.HandlerFunc {
-	return func(w http.ResponseWriter, request *http.Request) {
-		err := request.ParseMultipartForm(64 << 20)
+		_, err = io.Copy(dst, file)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint(err),
+			})
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: "File uploaded successfully",
+		})
 
-		file, h, err := request.FormFile("file")
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
+		file_inlist := MediaFile{
+			GUID:        "fk" + handler.Filename,
+			Path:        "./files/",
+			Name:        handler.Filename,
+			Status:      ACCEPTED,
+			Link:        "fk",
+			WH:          "fk",
+			WhisperDone: false,
+			SummaryDone: false,
+			ToneDone:    false,
 		}
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("File has been created: \n", file_inlist),
+		})
 
-		tmpfile, err := os.Create("./files/" + fmt.Sprintf("%s ", h.Filename)) //saving file to files dir
+		server.filesList["fk"+handler.Filename] = file_inlist
+		go server.evaluatingWhisper(fmt.Sprintf("%s\\%s", "./files", handler.Filename), server.filesList["fk"+handler.Filename])
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during creating file\n%s \n", err)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("An error has accured during evaling whisper\n%s \n", err),
+			})
 			return
 		}
 
-		n, err := io.Copy(tmpfile, file)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("An error has accured during copying data to created file\n%s \n", err)
-			return
-		}
-		log.Printf("Recieved new file. \n Its content:\n%d\n", n)
-		defer tmpfile.Close()
-
-		w.WriteHeader(204)
+		w.WriteHeader(200)
 	}
 }
 
-func (server *Server) getAll() http.HandlerFunc {
-	return func(w http.ResponseWriter, request *http.Request) {
-		var json_content Request
-		err := json.NewDecoder(request.Body).Decode(&json_content)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		//todo!()
-	}
-}
-
-func (server *Server) getFile() http.HandlerFunc {
-	return func(w http.ResponseWriter, request *http.Request) {
-		//todo!()
-	}
-}
-
-func evaluatingWhisper(file_path string, fileinfo MediaFile) error {
+// evoke whisper script
+func (server *Server) evaluatingWhisper(file_path string, fileinfo MediaFile) error {
 	//Need to do flag eval
-	log.Printf("PATH: %s\n", file_path)
-	fileinfo.Status = IN_PROGRESS
-	cmd := exec.Command("python", whisperAIScript, file_path)
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
+	fmt.Println(server.bussy)
+	fmt.Printf("PATH: %s\n", file_path)
+	fileinfo.Status = "transcribing"
 	for {
-		_, err_txt := os.Stat(fmt.Sprintf("%s\\%s_text.txt", fileinfo.Path, fileinfo.Name))
-		//_, err_tone := os.Stat(fmt.Sprintf("%s\\%s_tone", fileinfo.Path, fileinfo.Name))
-		//_, err_summary := os.Stat(fmt.Sprintf("%s\\%s_summary", fileinfo.Path, fileinfo.Name))
-		if err_txt != nil { //&& err_tone != nil && err_summary != nil {
+		if server.bussy != true {
+			server.bussy = true
 			break
 		}
 
+		time.Sleep(time.Minute)
+		fmt.Println("Waiting for server's queue resolving...")
 	}
-	fileinfo.Status = DONE
-	pingClientFK(fileinfo)
+	fmt.Println("Summoning whisper")
+	cmd := exec.Command("python", whisperAIScript, file_path, fileinfo.GUID)
+	err := cmd.Run()
+
+	if err != nil {
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("Error at running Whisper:\n%s \n", err),
+		})
+		return err
+	}
 	return nil
 }
 
+// notificate FK client about file complition
 func pingClientFK(file MediaFile) ([]byte, error) {
 	var json_content Request
 	json_content.ID = file.GUID
@@ -280,7 +434,59 @@ func pingClientFK(file MediaFile) ([]byte, error) {
 
 	req, err := http.NewRequest(http.MethodPost, file.WH, bytes.NewBuffer(jsonValue))
 	if err != nil {
-		log.Fatal("wtf json")
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("Error at sending ping request to %s, got the following error:\n%s", file.WH, err),
+		})
+	}
+
+	client := &http.Client{}
+	response := &http.Response{}
+	for {
+		res, err := client.Do(req)
+		if res.StatusCode != http.StatusNotFound {
+			response = res
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Successfully sanded data to %s!", file.WH),
+			})
+			break
+		}
+
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Error at sending ping request to %s (while re-trying), got the following error:\n%s", file.WH, err),
+			})
+			return []byte{}, err
+		}
+	}
+	defer response.Body.Close()
+	fmt.Println(response.StatusCode)
+	cnt, err := io.ReadAll(response.Body)
+	if err != nil {
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("Error at response from %s, got the following error:\n%s", file.WH, err),
+		})
+		return []byte{}, err
+	}
+	return cnt, nil
+}
+
+// notificate FK client about error
+func (server *Server) pingFKErrorCase(file MediaFile, errmsg string) ([]byte, error) {
+	var json_content Request
+	json_content.ID = file.GUID
+	json_content.RequestStatus = "При обработке записи разговора произошла ошибка."
+	jsonValue, _ := json.Marshal(json_content)
+
+	req, err := http.NewRequest(http.MethodPost, file.WH, bytes.NewBuffer(jsonValue))
+	if err != nil {
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("Error at sending request at:", file.WH, "\n", "Error:", "\n", err, "\n"),
+		})
 	}
 
 	client := &http.Client{}
@@ -293,42 +499,99 @@ func pingClientFK(file MediaFile) ([]byte, error) {
 		}
 
 		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint("Error at sending request at:", file.WH, "\n", "Error:", "\n", err, "\n"),
+			})
 			return []byte{}, err
 		}
 	}
 	defer response.Body.Close()
-	log.Println(response.StatusCode)
+	fmt.Println(response.StatusCode)
 	cnt, err := io.ReadAll(response.Body)
 	if err != nil {
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("Error at reading response:\n", err, "\n"),
+		})
 		return []byte{}, err
 	}
+
+	log.Println(errmsg)
+	err = os.RemoveAll(file.Path)
+	if err != nil {
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("Error at removing files:\n", err, "\n"),
+		})
+	}
+	delete(server.filesList, file.GUID)
 	return cnt, nil
 }
 
-// reading from txt files
+// collecting txt files data
 func text_tone_summary(file MediaFile) ([]byte, []byte, []byte) {
-	text := readFile(fmt.Sprintf("%s\\%s_text", file.Path, file.Name))
-	tone := readFile(fmt.Sprintf("%s\\%s_tone", file.Path, file.Name))
-	summary := readFile(fmt.Sprintf("%s\\%s_summary", file.Path, file.Name))
+	fmt.Printf("%s\\%s_text.txt\n", file.Path, file.Name)
+	text := readFile(fmt.Sprintf("%s\\%s_text.txt", file.Path, file.Name))
+	tone := text    //readFile(fmt.Sprintf("%s\\%s_tone.txt", file.Path, file.Name))
+	summary := text //readFile(fmt.Sprintf("%s\\%s_summary.txt", file.Path, file.Name))
 	return text, tone, summary
 }
 
+// reading data from file
 func readFile(filetoread string) []byte {
+	fmt.Printf("%s\n", filetoread)
 	file_info, error := os.Stat(filetoread)
 	if error != nil {
-		log.Fatal(error)
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprint("Error at os.Stat:\n", error, "\n"),
+		})
 	}
 	file_size := file_info.Size()
 	file, err := os.Open(filetoread)
 	if err != nil {
-		log.Fatal(err)
+		Logger(LogEntry{
+			date:     time.Now(),
+			contents: fmt.Sprintf("Error at reading from file (%s):\n%s", filetoread, err),
+		})
 	}
 	defer func() {
 		if err = file.Close(); err != nil {
-			log.Fatal(err)
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Error at closing file (%s):\n%s", filetoread, err),
+			})
 		}
 	}()
 	buf := make([]byte, file_size)
 	file.Read(buf)
+	//defer file.Close()
 	return buf
+}
+
+// checking if the key is valid
+func ValidKey(s []string, e string) bool {
+	for _, v := range s {
+		if v == e {
+			return true
+		}
+	}
+	return false
+}
+
+// writing a log entry
+func Logger(entry LogEntry) {
+	date := fmt.Sprintf("%d.%d.%d", entry.date.Day(), entry.date.Month(), entry.date.Year())
+	filename := fmt.Sprintf("logby_%s.log", date)
+	f, err := os.OpenFile("./logs/"+filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+
+	defer f.Close()
+
+	wrt := io.MultiWriter(os.Stdout, f)
+	log.SetOutput(wrt)
+	log.Print("				" + entry.contents)
 }

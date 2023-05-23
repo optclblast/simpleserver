@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <title>File uploader</title>
+    </head>
+
+    <body>
+        <form id="uploadForm">
+            <label>Выберите файл для транскрибации (mp4 / mp3 / webm / wav)</label><br><br>
+            <input type="file" id="fileInput" name="fileInput"><br><br>
+            <button type="submit">Upload</button><br><br>
+        </form>
+    </body>
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            
+            var fileInput = document.getElementById('fileInput');
+            var file = fileInput.files[0];
+            
+            var formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('http://server/main/diarize-file', {
+            method: 'POST',
+            body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+            console.log(data);
+            })
+            .catch(error => {
+            console.error(error);
+            });
+        });
+    </script>
+</html>
