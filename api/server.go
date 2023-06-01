@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,19 +11,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"server/db"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
-var API_KEY_CLIENT = []string{"key1", "key2", "key3", "key4"}
-var API_KEY_FK = []string{"key"}
+var API_KEY_CLIENT = []string{"11", "22", "223", "444"}
+var API_KEY_FK = []string{"555"}
 
 const (
-	OPENAI_API_TOKEN = "YOUR_TOKEN"
+	OPENAI_API_TOKEN = "TOKEN"
 
-	whisperAIScript = "yourpath/diarize.py" //whisper-ai script
-	downloadingDir  = "PATH"
+	whisperAIScript = "./script.py" //whisper-ai script
+	downloadingDir  = "./files"
 	DONE            = "DONE"
 	ACCEPTED        = "ACCEPTED"
 	IN_PROGRESS     = "IN_PROGRESS"
@@ -43,12 +45,6 @@ type MediaFile struct {
 type Request struct {
 	ID            string `json:"id"`
 	RequestStatus string `json:"status"`
-}
-
-type YandexApiResponse struct {
-	Href      string `json:"href"`
-	Method    string `json:"method"`
-	Templated bool
 }
 
 type LogEntry struct {
@@ -73,7 +69,7 @@ func NewLogEntry(date time.Time, content string) LogEntry {
 func NewServer() *Server {
 	server := &Server{
 		Router:    mux.NewRouter(),
-		filesList: map[string]MediaFile{},
+		filesList: make(map[string]MediaFile),
 		bussy:     false,
 	}
 	fmt.Println(server.bussy)
@@ -86,21 +82,29 @@ func (server *Server) routes() {
 	server.HandleFunc("/send-link", server.handleSendLink()).Methods("GET")
 	server.HandleFunc("/get-result", server.handleGetResult()).Methods("GET")
 	server.HandleFunc("/whisper_ping", server.handleWhisperPing()).Methods("GET")
-	server.HandleFunc("/main", server.handleMainPage()).Methods("GET")
+	server.HandleFunc("/signin", server.handleMainPage()).Methods("GET")
+	server.HandleFunc("/userPage", server.getUserPage()).Methods("GET")
+	server.HandleFunc("/userPage/data/getfile", server.fileReaderPage()).Methods("GET")
+	/////////////////
+	server.HandleFunc("/userPage/data", server.getUserData()).Methods("POST")
+	server.HandleFunc("/userPage/data/getfile", server.getFileReq()).Methods("POST")
 	server.HandleFunc("/main/diarize-file", server.handleUploadedFile()).Methods("POST")
+	server.HandleFunc("/signin/auth", server.handleSignIn()).Methods("POST")
+	server.HandleFunc("/register", server.handleRegister()).Methods("POST")
+	/////////////////
+	server.HandleFunc("/userPage/data/deletefile", server.deleteUserFile()).Methods("DELETE")
 }
 
 // recieving data from client
 func (server *Server) handleSendLink() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		//reading from query string
 		params := r.URL.Query()
 		fileID := params.Get("file_id")
 		apiKey := params.Get("api_key")
 		link := params.Get("link")
 		responseURL := params.Get("response_uri")
 		fmt.Println(server.bussy)
-		//log.Printf("PARAMS: %s\n", params) //debug stuff
+
 		//auth
 		if !ValidKey(API_KEY_CLIENT, apiKey) {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -131,8 +135,8 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 			})
 			return
 		}
-
-		fileName := filepath.Base(resp.Request.URL.Path)
+		fmt.Println(resp)
+		fileName := removeSpaces(filepath.Base(resp.Request.URL.Path))
 		newdir := fmt.Sprintf("%s\\%s", downloadingDir, fileName)
 		err = os.Mkdir(newdir, 0750)
 		if err != nil {
@@ -214,12 +218,9 @@ func (server *Server) handleGetResult() http.HandlerFunc {
 		}
 
 		file := server.filesList[fileID]
-		//checking for file in the lis
-		//got the data
 
-		text, tone, summary := text_tone_summary(file)
+		text, tone, summary := textToneSummary(file)
 
-		//prepearing response with out content
 		response := map[string]string{
 			"text":    string(text),
 			"tone":    string(tone),
@@ -265,6 +266,24 @@ func (server *Server) handleWhisperPing() http.HandlerFunc {
 
 		file := server.filesList[fileID]
 
+		dbconn, err := db.NewConnection()
+		if err != nil {
+			Logger(NewLogEntry(time.Now(), fmt.Sprint(err)))
+			http.Error(w, "500", http.StatusInternalServerError)
+			return
+		}
+		defer dbconn.Close()
+		qry := db.New(dbconn)
+		dbfile, err := qry.GetFileByGuid(context.Background(), fileID)
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprint(err),
+			})
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		if errors != "" {
 			Logger(LogEntry{
 				date:     time.Now(),
@@ -274,12 +293,12 @@ func (server *Server) handleWhisperPing() http.HandlerFunc {
 			server.pingFKErrorCase(file, errors)
 			return
 		}
+
 		if file.Link == "fk" {
 			Logger(LogEntry{
 				date:     time.Now(),
-				contents: fmt.Sprintf("File from FK: %s", file.Name),
+				contents: fmt.Sprintf("File from client: %s", file.Name),
 			})
-			return
 		}
 
 		Logger(LogEntry{
@@ -291,107 +310,29 @@ func (server *Server) handleWhisperPing() http.HandlerFunc {
 			fmt.Println(key)
 		}
 		file.WhisperDone = true
+
+		updateFileParams := db.UpdateFileParams{
+			Id:     dbfile.Id,
+			Name:   dbfile.Name,
+			Status: "DONE",
+		}
+		_, err = qry.UpdateFile(context.Background(), updateFileParams)
+		if err != nil {
+			Logger(LogEntry{
+				date:     time.Now(),
+				contents: fmt.Sprintf("Cannot update file %s", err),
+			})
+		}
+
 		file.Status = DONE
 		server.bussy = false
 		b, err := pingClientFK(file)
 		if err != nil {
 			Logger(LogEntry{
 				date:     time.Now(),
-				contents: fmt.Sprintf("Bad req to FK! %s\n%d", err, b),
+				contents: fmt.Sprintf("Bad req to cl! %s\n%d", err, b),
 			})
 		}
-		//}
-	}
-}
-
-func (server *Server) handleMainPage() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-
-		w.Write(readFile("./htmls/main.html"))
-	}
-}
-
-func (server *Server) handleUploadedFile() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(server.bussy)
-		err := r.ParseMultipartForm(10 << 20)
-		Logger(LogEntry{
-			date:     time.Now(),
-			contents: fmt.Sprint(err),
-		})
-		if err != nil {
-			Logger(LogEntry{
-				date:     time.Now(),
-				contents: fmt.Sprint(err),
-			})
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		file, handler, err := r.FormFile("file")
-		if err != nil {
-			Logger(LogEntry{
-				date:     time.Now(),
-				contents: fmt.Sprint(err),
-			})
-			http.Error(w, "Failed to retrieve file", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		dst, err := os.Create("./files/" + handler.Filename)
-		if err != nil {
-			Logger(LogEntry{
-				date:     time.Now(),
-				contents: fmt.Sprint(err),
-			})
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer dst.Close()
-
-		_, err = io.Copy(dst, file)
-		if err != nil {
-			Logger(LogEntry{
-				date:     time.Now(),
-				contents: fmt.Sprint(err),
-			})
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		Logger(LogEntry{
-			date:     time.Now(),
-			contents: "File uploaded successfully",
-		})
-
-		file_inlist := MediaFile{
-			GUID:        "fk" + handler.Filename,
-			Path:        "./files/",
-			Name:        handler.Filename,
-			Status:      ACCEPTED,
-			Link:        "fk",
-			WH:          "fk",
-			WhisperDone: false,
-			SummaryDone: false,
-			ToneDone:    false,
-		}
-		Logger(LogEntry{
-			date:     time.Now(),
-			contents: fmt.Sprint("File has been created: \n", file_inlist),
-		})
-
-		server.filesList["fk"+handler.Filename] = file_inlist
-		go server.evaluatingWhisper(fmt.Sprintf("%s\\%s", "./files", handler.Filename), server.filesList["fk"+handler.Filename])
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			Logger(LogEntry{
-				date:     time.Now(),
-				contents: fmt.Sprintf("An error has accured during evaling whisper\n%s \n", err),
-			})
-			return
-		}
-
-		w.WriteHeader(200)
 	}
 }
 
@@ -402,13 +343,13 @@ func (server *Server) evaluatingWhisper(file_path string, fileinfo MediaFile) er
 	fmt.Printf("PATH: %s\n", file_path)
 	fileinfo.Status = "transcribing"
 	for {
-		if server.bussy != true {
+		if !server.bussy {
 			server.bussy = true
 			break
 		}
 
 		time.Sleep(time.Minute)
-		fmt.Println("Waiting for server's queue resolving...")
+		fmt.Printf("Waiting for server's queue resolving... Current state: %v\n", server.bussy)
 	}
 	fmt.Println("Summoning whisper")
 	cmd := exec.Command("python", whisperAIScript, file_path, fileinfo.GUID)
@@ -424,7 +365,7 @@ func (server *Server) evaluatingWhisper(file_path string, fileinfo MediaFile) er
 	return nil
 }
 
-// notificate FK client about file complition
+// notificate client about file complition
 func pingClientFK(file MediaFile) ([]byte, error) {
 	var json_content Request
 	json_content.ID = file.GUID
@@ -530,11 +471,11 @@ func (server *Server) pingFKErrorCase(file MediaFile, errmsg string) ([]byte, er
 }
 
 // collecting txt files data
-func text_tone_summary(file MediaFile) ([]byte, []byte, []byte) {
+func textToneSummary(file MediaFile) ([]byte, []byte, []byte) {
 	fmt.Printf("%s\\%s_text.txt\n", file.Path, file.Name)
 	text := readFile(fmt.Sprintf("%s\\%s_text.txt", file.Path, file.Name))
-	tone := text    //readFile(fmt.Sprintf("%s\\%s_tone.txt", file.Path, file.Name))
-	summary := text //readFile(fmt.Sprintf("%s\\%s_summary.txt", file.Path, file.Name))
+	tone := text
+	summary := text
 	return text, tone, summary
 }
 
@@ -566,7 +507,6 @@ func readFile(filetoread string) []byte {
 	}()
 	buf := make([]byte, file_size)
 	file.Read(buf)
-	//defer file.Close()
 	return buf
 }
 
@@ -594,4 +534,14 @@ func Logger(entry LogEntry) {
 	wrt := io.MultiWriter(os.Stdout, f)
 	log.SetOutput(wrt)
 	log.Print("				" + entry.contents)
+}
+
+func removeSpaces(name string) string {
+	runes := []rune(name)
+	for i, c := range runes {
+		if c == ' ' {
+			runes[i] = '_'
+		}
+	}
+	return string(runes)
 }

@@ -6,15 +6,31 @@ import (
 	"net/http"
 	"os"
 	"server/api"
+	"server/auth"
 	"time"
 )
 
 func main() {
 	port := portDeclaration()
 	server := api.NewServer()
+	err := auth.GenerateKeyPair(false)
+	if err != nil {
+		api.Logger(api.NewLogEntry(
+			time.Now(),
+			fmt.Sprint(err),
+		))
+	}
+
 	addr := "0.0.0.0"
 	fmt.Println(addr + port)
-	err := http.ListenAndServe(addr+port, server)
+	if err != nil {
+		api.Logger(api.NewLogEntry(
+			time.Now(),
+			fmt.Sprint(err),
+		))
+		os.Exit(1)
+	}
+	err = http.ListenAndServe(addr+port, server)
 	if err != nil {
 		api.Logger(api.NewLogEntry(
 			time.Now(),
@@ -23,7 +39,6 @@ func main() {
 	}
 }
 
-// Выбор порта для сервера
 func portDeclaration() string {
 	fmt.Println("Please, enter a port the server will be listening to (type \"d\" for 8080 )")
 

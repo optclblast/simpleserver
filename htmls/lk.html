@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Your Files</title>
+</head>
+
+<body>
+    <div class="container">
+        <div>
+            <h1>Ваши файлы</h1>
+        </div>
+        <div class="main-content">
+            <div id="container" class="text-area">
+                
+            </div>
+            <div class="button-area">
+                <button id="rf-button" type="refresh" onclick="refreshList()">Обновить список файлов</button><br>
+            </div>
+        </div>
+    </div><br><br><br><br>
+    <div class="uploader">
+        <div>
+            <h1>Выберите файл для транскрибации (mp4 / mp3 / webm / wav)</h1>
+        </div>
+        <form id="uploadForm">
+            <input type="file" id="fileInput" name="fileInput"><br><br>
+            <button type="submit">Загрузить</button><br><br>
+        </form>
+    </div>
+</body>
+<script>
+    var container = document.getElementById("container");
+    function refreshList() {    
+
+        event.preventDefault();
+        fetch('http://domain.dom/userPage/data', {
+            method: 'POST',
+            body: JSON.stringify({
+                title: 'This will be the title',
+                body: 'Setting the body property',
+                userId: 1,
+            }),
+            headers: {
+                'Content-type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            var container = document.getElementById("container");
+            container.innerHTML = "";
+            strdata = JSON.stringify(data);
+            let respJson = JSON.parse(strdata);
+            let filesArray = respJson.files;
+            console.log(strdata)
+            filesArray.forEach(element => {
+                var row = document.createElement("div");
+                row.className = "row"; 
+                var content = document.createTextNode(element.id + "  " +
+                element.name + "  " + element.created_at + "  " + element.status + "  " + element.guid + "  ");
+                row.appendChild(content);
+                if (element.status == "DONE") {
+                    var button = document.createElement("button");
+                    button.textContent = "Посмотреть";
+                    button.id = element.id;
+                    button.setAttribute("onclick", "view(event)");
+                    row.appendChild(button);
+
+                    var buttonDel = document.createElement("button");
+                    buttonDel.textContent = "Удалить";
+                    buttonDel.id = element.id;
+                    buttonDel.setAttribute("onclick", "deleteFile(event)");
+                    row.appendChild(buttonDel);
+                }
+                container.appendChild(row);
+            });
+        })
+    }
+    
+    function view(event) {
+        fetch('http://domain.dom/userPage/data/getfile', {
+            method: 'POST',
+            body: JSON.stringify({
+                fileId: event.target.id,
+            }),
+            headers: {
+                'Content-type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (response.ok) {
+                window.location.href = "http://domain.dom/userPage/data/getfile?" + "fid=" +event.target.id;
+            }
+        })
+    }
+
+    function deleteFile(event) {
+        fetch('http://domain.dom/userPage/data/deletefile?fid=' + event.target.id, {
+            method: 'DELETE',
+        })
+    }
+
+    document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            
+            var fileInput = document.getElementById('fileInput');
+            var file = fileInput.files[0];
+            
+            var formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('http://domain.dom/main/diarize-file', {
+            method: 'POST',
+            body: formData
+            })
+            .catch(error => {
+                console.error(error);
+            });
+        });
+</script>
+
+</html>
