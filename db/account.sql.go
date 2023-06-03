@@ -7,7 +7,6 @@ import (
 )
 
 type CreateAccountParams struct {
-	Id        int64     `json:"id"`
 	Login     string    `json:"login"`
 	Password  string    `json:"password"`
 	Address   string    `json:"address"`
@@ -17,19 +16,18 @@ type CreateAccountParams struct {
 
 const createAccount = `-- name: CreateAccount :one
 INSERT INTO users (
-	id,
 	login,
 	password,
 	address,
 	created_at,
 	session
 ) VALUES (
-	$1, $2, $3, $4, $5, $6
+	$1, $2, $3, $4, $5
 ) RETURNING id, login, password, address, created_at, session
 `
 
 func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error) {
-	row := q.db.QueryRowContext(ctx, createAccount, arg.Id, arg.Login, arg.Password, arg.Address, time.Now(), arg.Session)
+	row := q.db.QueryRowContext(ctx, createAccount, arg.Login, arg.Password, arg.Address, time.Now(), arg.Session)
 	var i Account
 	err := row.Scan(
 		&i.Id,

@@ -18,7 +18,7 @@ import (
 )
 
 var API_KEY_CLIENT = []string{"11", "22", "223", "444"}
-var API_KEY_FK = []string{"555"}
+var API_KEY_VIP = []string{"555"}
 
 const (
 	OPENAI_API_TOKEN = "TOKEN"
@@ -38,8 +38,6 @@ type MediaFile struct {
 	Link        string
 	WH          string
 	WhisperDone bool
-	SummaryDone bool
-	ToneDone    bool
 }
 
 type Request struct {
@@ -78,7 +76,6 @@ func NewServer() *Server {
 }
 
 func (server *Server) routes() {
-	//FK server endpoints
 	server.HandleFunc("/send-link", server.handleSendLink()).Methods("GET")
 	server.HandleFunc("/get-result", server.handleGetResult()).Methods("GET")
 	server.HandleFunc("/whisper_ping", server.handleWhisperPing()).Methods("GET")
@@ -137,7 +134,7 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 		}
 		fmt.Println(resp)
 		fileName := removeSpaces(filepath.Base(resp.Request.URL.Path))
-		newdir := fmt.Sprintf("%s\\%s", downloadingDir, fileName)
+		newdir := fmt.Sprintf("%s/%s", downloadingDir, fileName)
 		err = os.Mkdir(newdir, 0750)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -152,7 +149,7 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 			fileName += ".mp3"
 		}
 
-		file, err := os.Create(fmt.Sprintf("%s\\", newdir) + fileName) //saving file to files dir
+		file, err := os.Create(fmt.Sprintf("%s/", newdir) + fileName) //saving file to files dir
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			Logger(LogEntry{
@@ -182,8 +179,6 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 			Link:        link,
 			WH:          responseURL,
 			WhisperDone: false,
-			SummaryDone: false,
-			ToneDone:    false,
 		}
 		Logger(LogEntry{
 			date:     time.Now(),
@@ -194,7 +189,7 @@ func (server *Server) handleSendLink() http.HandlerFunc {
 		defer file.Close()
 
 		//executing whisper's scpipt
-		go server.evaluatingWhisper(fmt.Sprintf("%s\\%s", newdir, fileName), server.filesList[fileID])
+		go server.evaluatingWhisper(fmt.Sprintf("%s/%s", newdir, fileName), server.filesList[fileID])
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			Logger(LogEntry{
@@ -290,11 +285,11 @@ func (server *Server) handleWhisperPing() http.HandlerFunc {
 				contents: fmt.Sprintf("Whisper cannot handle %s request! Whisper's error:\n%s\n", fileID, errors),
 			})
 			w.WriteHeader(http.StatusBadRequest)
-			server.pingFKErrorCase(file, errors)
+			server.pingCLErrorCase(file, errors)
 			return
 		}
 
-		if file.Link == "fk" {
+		if file.Link == "web" {
 			Logger(LogEntry{
 				date:     time.Now(),
 				contents: fmt.Sprintf("File from client: %s", file.Name),
@@ -326,7 +321,7 @@ func (server *Server) handleWhisperPing() http.HandlerFunc {
 
 		file.Status = DONE
 		server.bussy = false
-		b, err := pingClientFK(file)
+		b, err := pingClientVIP(file)
 		if err != nil {
 			Logger(LogEntry{
 				date:     time.Now(),
@@ -366,7 +361,7 @@ func (server *Server) evaluatingWhisper(file_path string, fileinfo MediaFile) er
 }
 
 // notificate client about file complition
-func pingClientFK(file MediaFile) ([]byte, error) {
+func pingClientVIP(file MediaFile) ([]byte, error) {
 	var json_content Request
 	json_content.ID = file.GUID
 	json_content.RequestStatus = file.Status
@@ -415,8 +410,7 @@ func pingClientFK(file MediaFile) ([]byte, error) {
 	return cnt, nil
 }
 
-// notificate FK client about error
-func (server *Server) pingFKErrorCase(file MediaFile, errmsg string) ([]byte, error) {
+func (server *Server) pingCLErrorCase(file MediaFile, errmsg string) ([]byte, error) {
 	var json_content Request
 	json_content.ID = file.GUID
 	json_content.RequestStatus = "При обработке записи разговора произошла ошибка."
@@ -472,8 +466,8 @@ func (server *Server) pingFKErrorCase(file MediaFile, errmsg string) ([]byte, er
 
 // collecting txt files data
 func textToneSummary(file MediaFile) ([]byte, []byte, []byte) {
-	fmt.Printf("%s\\%s_text.txt\n", file.Path, file.Name)
-	text := readFile(fmt.Sprintf("%s\\%s_text.txt", file.Path, file.Name))
+	fmt.Printf("%s/%s_text.txt\n", file.Path, file.Name)
+	text := readFile(fmt.Sprintf("%s/%s_text.txt", file.Path, file.Name))
 	tone := text
 	summary := text
 	return text, tone, summary

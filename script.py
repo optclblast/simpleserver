@@ -1,11 +1,8 @@
-import os
 import torch
 import subprocess
 import whisper
 import requests
-import datetime
 import subprocess
-from pydub import AudioSegment
 from pyannote.audio import Pipeline
 from pyannote_whisper.utils import diarize_text
 from pywhispercpp.model import Model
@@ -35,9 +32,6 @@ def file_handler(path, guid):
             file_wav = path[:-5] + ".wav"
             print(path + "\n" + file_wav + "\n")
             subprocess.call(['ffmpeg', '-i', path, '-vn', file_wav])
-
-        print("\n================================\n" + file_wav + "\n===============================\n") ##DEBUG
-
 
         model_size = "large" 
         model = whisper.load_model(f"{model_size}", device = devices)

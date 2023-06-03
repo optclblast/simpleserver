@@ -177,14 +177,12 @@ func (server *Server) handleRegister() http.HandlerFunc {
 			return
 		}
 
-		lastid, err := qry.GetLastAccountID(context.Background())
 		if err != nil {
 			Logger(NewLogEntry(time.Now(), fmt.Sprintf("%s, loc: [reg]GetLastAccountID()", err)))
 			http.Error(w, "500", http.StatusInternalServerError)
 			return
 		}
 		arg := db.CreateAccountParams{
-			Id:        lastid + 1,
 			Login:     user.Login,
 			Password:  user.Password,
 			Address:   "web",
@@ -330,7 +328,7 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 		userSession, ok := session.Values["login"]
 		if !ok {
 			w.WriteHeader(http.StatusBadRequest)
-			Logger(NewLogEntry(time.Now(), fmt.Sprint("There are no such field `login` in the given session")))
+			Logger(NewLogEntry(time.Now(), "There are no such field `login` in the given session"))
 			return
 		}
 		dbconn, err := db.NewConnection()
@@ -389,29 +387,20 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 		})
 
 		file_inlist := MediaFile{
-			GUID:        "fk" + name,
+			GUID:        "wev" + name,
 			Path:        ".\\services\\httpserver_fk\\fk_files",
 			Name:        name,
 			Status:      ACCEPTED,
-			Link:        "fk",
-			WH:          "fk",
+			Link:        "web",
+			WH:          "web",
 			WhisperDone: false,
-			SummaryDone: false,
-			ToneDone:    false,
 		}
 		Logger(LogEntry{
 			date:     time.Now(),
 			contents: fmt.Sprint("File has been created: \n", file_inlist),
 		})
 
-		lastid, err := qry.GetLastFileID(context.Background())
-		if err != nil {
-			Logger(NewLogEntry(time.Now(), fmt.Sprintf("%s, loc: [handleUploadedFile]GetLastFileID()", err)))
-			http.Error(w, "500", http.StatusInternalServerError)
-			return
-		}
 		createFileParams := db.CreateFileParams{
-			Id:          lastid + 1,
 			Owner:       user.Id,
 			Name:        file_inlist.Name,
 			Location:    file_inlist.Path + "\\" + file_inlist.Name,
