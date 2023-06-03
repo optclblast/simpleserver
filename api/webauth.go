@@ -361,7 +361,7 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 		}
 		defer file.Close()
 		name := removeSpaces(handler.Filename)
-		dst, err := os.Create(".\\services\\httpserver_fk\\fk_files\\" + name)
+		dst, err := os.Create("./services/httpserver_WEB/WEB_files/" + name)
 		if err != nil {
 			Logger(LogEntry{
 				date:     time.Now(),
@@ -388,7 +388,7 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 
 		file_inlist := MediaFile{
 			GUID:        "wev" + name,
-			Path:        ".\\services\\httpserver_fk\\fk_files",
+			Path:        "./services/httpserver_WEB/WEB_files",
 			Name:        name,
 			Status:      ACCEPTED,
 			Link:        "web",
@@ -403,9 +403,9 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 		createFileParams := db.CreateFileParams{
 			Owner:       user.Id,
 			Name:        file_inlist.Name,
-			Location:    file_inlist.Path + "\\" + file_inlist.Name,
-			LocationWav: file_inlist.Path + "\\" + strings.Split(filepath.Base(file_inlist.Name), ".")[0] + ".wav",
-			LocationTxt: file_inlist.Path + "\\" + strings.Split(filepath.Base(file_inlist.Name), ".")[0] + ".mp3_text.txt",
+			Location:    file_inlist.Path + "/" + file_inlist.Name,
+			LocationWav: file_inlist.Path + "/" + strings.Split(filepath.Base(file_inlist.Name), ".")[0] + ".wav",
+			LocationTxt: file_inlist.Path + "/" + strings.Split(filepath.Base(file_inlist.Name), ".")[0] + ".mp3_text.txt",
 			CreatedAt:   time.Now(),
 			Status:      file_inlist.Status,
 			Guid:        file_inlist.GUID,
@@ -418,8 +418,8 @@ func (server *Server) handleUploadedFile() http.HandlerFunc {
 			return
 		}
 
-		server.filesList["fk"+handler.Filename] = file_inlist
-		go server.evaluatingWhisper(fmt.Sprintf("%s\\%s", ".\\httpserver_fk\\fk_files", name), server.filesList["fk"+name])
+		server.filesList["web"+handler.Filename] = file_inlist
+		go server.evaluatingWhisper(fmt.Sprintf("%s/%s", "./PATH", name), server.filesList["web"+name])
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			Logger(LogEntry{
